@@ -29,6 +29,7 @@
 import torch
 import torch.nn as nn
 import torch.distributions as distributions
+from torch.distributions.normal import Normal
 
 
 class BaseVariationalLayer_(nn.Module):
@@ -51,3 +52,17 @@ class BaseVariationalLayer_(nn.Module):
             sigma_q) + (sigma_q**2 + (mu_q - mu_p)**2) / (2 *
                                                           (sigma_p**2)) - 0.5
         return kl.mean()
+
+    def log_prob(self, sampled_weight, mu, sigma):
+        """
+        Calculates sum of negative log probability of sampled weight given N (mu, sigma)
+
+        Parameters:
+             * sampled_weight: torch.Tensor -> sampled weight parameter
+             * mu: torch.Tensor -> mu parameter of distribution
+             * sigma: torch.Tensor -> sigma parameter of distribution
+
+        returns torch.Tensor of shape 0
+        """
+        return torch.sum(Normal(loc=mu, scale=sigma).log_prob(sampled_weight))
+        

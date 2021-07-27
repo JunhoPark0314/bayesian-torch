@@ -194,7 +194,6 @@ class Conv1dFlipout(BaseVariationalLayer_):
         # returning outputs + perturbations
         return outputs + perturbed_outputs, kl
 
-
 class Conv2dFlipout(BaseVariationalLayer_):
     def __init__(self,
                  in_channels,
@@ -267,6 +266,12 @@ class Conv2dFlipout(BaseVariationalLayer_):
                          kernel_size),
             persistent=False)
 
+        self.register_buffer(
+            'delta_kernel',
+            torch.Tensor(out_channels, in_channels // groups, kernel_size,
+                         kernel_size),
+            persistent=False)
+
         if self.bias:
             self.mu_bias = nn.Parameter(torch.Tensor(out_channels))
             self.rho_bias = nn.Parameter(torch.Tensor(out_channels))
@@ -275,12 +280,14 @@ class Conv2dFlipout(BaseVariationalLayer_):
             self.register_buffer('prior_bias_sigma',
                                  torch.Tensor(out_channels),
                                  persistent=False)
+            self.register_buffer('delta_bias', torch.Tensor(out_channels), persistent=False)
         else:
             self.register_parameter('mu_bias', None)
             self.register_parameter('rho_bias', None)
             self.register_buffer('eps_bias', None, persistent=False)
             self.register_buffer('prior_bias_mu', None, persistent=False)
             self.register_buffer('prior_bias_sigma', None, persistent=False)
+            self.register_buffer('delta_bias', None, persistent=False)
 
         self.init_parameters()
 
@@ -298,6 +305,28 @@ class Conv2dFlipout(BaseVariationalLayer_):
             self.rho_bias.data.normal_(mean=self.posterior_rho_init, std=0.1)
             self.prior_bias_mu.data.fill_(self.prior_mean)
             self.prior_bias_sigma.data.fill_(self.prior_variance)
+    
+    def sample(self):
+        sampled_weight = {}
+
+        # gettin perturbation weights
+        sigma_weight = torch.log1p(torch.exp(self.rho_kernel))
+        eps_kernel = self.eps_kernel.data.normal_()
+        self.delta_kernel = (sigma_weight * eps_kernel)
+
+        kl = self.kl_div(self.mu_kernel, sigma_weight, self.prior_weight_mu,
+                         self.prior_weight_sigma)
+        sampled_weight["delta_kernel"] = self.delta_kernel.detach().clone()
+
+        if self.bias:
+            sigma_bias = torch.log1p(torch.exp(self.rho_bias))
+            eps_bias = self.eps_bias.data.normal_()
+            self.delta_bias = (sigma_bias * eps_bias)
+            kl = kl + self.kl_div(self.mu_bias, sigma_bias, self.prior_bias_mu,
+                                  self.prior_bias_sigma)
+            sampled_weight["delta_bias"] = self.delta_bias.detach().clone()
+
+        return kl, sampled_weight
 
     def forward(self, x):
 
@@ -314,34 +343,17 @@ class Conv2dFlipout(BaseVariationalLayer_):
         sign_input = x.clone().uniform_(-1, 1).sign()
         sign_output = outputs.clone().uniform_(-1, 1).sign()
 
-        # gettin perturbation weights
-        sigma_weight = torch.log1p(torch.exp(self.rho_kernel))
-        eps_kernel = self.eps_kernel.data.normal_()
-
-        delta_kernel = (sigma_weight * eps_kernel)
-
-        kl = self.kl_div(self.mu_kernel, sigma_weight, self.prior_weight_mu,
-                         self.prior_weight_sigma)
-
-        bias = None
-        if self.bias:
-            sigma_bias = torch.log1p(torch.exp(self.rho_bias))
-            eps_bias = self.eps_bias.data.normal_()
-            bias = (sigma_bias * eps_bias)
-            kl = kl + self.kl_div(self.mu_bias, sigma_bias, self.prior_bias_mu,
-                                  self.prior_bias_sigma)
-
         # perturbed feedforward
         perturbed_outputs = F.conv2d(x * sign_input,
-                                     weight=delta_kernel,
-                                     bias=bias,
+                                     weight=self.delta_kernel,
+                                     bias=self.delta_bias,
                                      stride=self.stride,
                                      padding=self.padding,
                                      dilation=self.dilation,
                                      groups=self.groups) * sign_output
 
         # returning outputs + perturbations
-        return outputs + perturbed_outputs, kl
+        return outputs + perturbed_outputs
 
 
 class Conv3dFlipout(BaseVariationalLayer_):
