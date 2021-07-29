@@ -89,6 +89,9 @@ class LinearFlipout(BaseVariationalLayer_):
         self.register_buffer('prior_weight_sigma',
                              torch.Tensor(out_features, in_features),
                              persistent=False)
+        self.register_buffer('delta_weight',
+                             torch.Tensor(out_features, in_features),
+                             persistent=False)
 
         if bias:
             self.mu_bias = nn.Parameter(torch.Tensor(out_features))
@@ -98,6 +101,7 @@ class LinearFlipout(BaseVariationalLayer_):
                                  torch.Tensor(out_features),
                                  persistent=False)
             self.register_buffer('eps_bias', torch.Tensor(out_features), persistent=False)
+            self.register_buffer('delta_bias', torch.Tensor(out_features), persistent=False)
 
         else:
             self.register_buffer('prior_bias_mu', None, persistent=False)
@@ -105,6 +109,7 @@ class LinearFlipout(BaseVariationalLayer_):
             self.register_parameter('mu_bias', None)
             self.register_parameter('rho_bias', None)
             self.register_buffer('eps_bias', None, persistent=False)
+            self.register_buffer('delta_bias', None, persistent=False)
 
         self.init_parameters()
 
@@ -122,31 +127,44 @@ class LinearFlipout(BaseVariationalLayer_):
             self.prior_bias_sigma.fill_(self.prior_variance)
             self.mu_bias.data.normal_(mean=self.posterior_mu_init, std=0.1)
             self.rho_bias.data.normal_(mean=self.posterior_rho_init, std=0.1)
-
-    def forward(self, x):
+        
+    def sample(self):
+        sampled_weight = []
         # sampling delta_W
         sigma_weight = torch.log1p(torch.exp(self.rho_weight))
-        delta_weight = (sigma_weight * self.eps_weight.data.normal_())
+        self.delta_weight = (sigma_weight * self.eps_weight.data.normal_())
+        sampled_weight.append(self.delta_weight.detach().clone())
 
         # get kl divergence
         kl = self.kl_div(self.mu_weight, sigma_weight, self.prior_weight_mu,
                          self.prior_weight_sigma)
 
-        bias = None
         if self.mu_bias is not None:
             sigma_bias = torch.log1p(torch.exp(self.rho_bias))
-            bias = (sigma_bias * self.eps_bias.data.normal_())
+            self.delta_bias = (sigma_bias * self.eps_bias.data.normal_())
             kl = kl + self.kl_div(self.mu_bias, sigma_bias, self.prior_bias_mu,
                                   self.prior_bias_sigma)
+            sampled_weight.append(self.delta_bias.detach().clone())
+        
+        return kl, sampled_weight
 
-        # linear outputs
+    def forward(self, x):
         outputs = F.linear(x, self.mu_weight, self.mu_bias)
 
         sign_input = x.clone().uniform_(-1, 1).sign()
         sign_output = outputs.clone().uniform_(-1, 1).sign()
 
-        perturbed_outputs = F.linear(x * sign_input, delta_weight,
-                                     bias) * sign_output
+        perturbed_outputs = F.linear(x * sign_input, self.delta_weight,
+                                     self.delta_bias) * sign_output
 
         # returning outputs + perturbations
-        return outputs + perturbed_outputs, kl
+        return outputs + perturbed_outputs
+
+    def dist(self):
+        mu_list = [self.mu_weight]
+        sigma_list = [torch.log1p(torch.exp(self.rho_weight))]
+
+        if self.mu_bias is not None:
+            mu_list.append(self.mu_bias)
+            sigma_list.append(torch.log1p(torch.exp(self.rho_bias)))
+        return mu_list, sigma_list

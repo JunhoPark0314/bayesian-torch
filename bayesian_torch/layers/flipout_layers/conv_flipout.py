@@ -290,7 +290,7 @@ class Conv2dFlipout(BaseVariationalLayer_):
             self.register_buffer('delta_bias', None, persistent=False)
 
         self.init_parameters()
-
+ 
     def init_parameters(self):
         # prior values
         self.prior_weight_mu.data.fill_(self.prior_mean)
@@ -306,8 +306,17 @@ class Conv2dFlipout(BaseVariationalLayer_):
             self.prior_bias_mu.data.fill_(self.prior_mean)
             self.prior_bias_sigma.data.fill_(self.prior_variance)
     
+    def dist(self):
+        mu_list = [self.mu_kernel]
+        sigma_list = [torch.log1p(torch.exp(self.rho_kernel))]
+
+        if self.bias:
+            mu_list.append(self.mu_bias)
+            sigma_list.append(torch.log1p(torch.exp(self.rho_bias)))
+        return mu_list, sigma_list
+    
     def sample(self):
-        sampled_weight = {}
+        sampled_weight = []
 
         # gettin perturbation weights
         sigma_weight = torch.log1p(torch.exp(self.rho_kernel))
@@ -316,7 +325,7 @@ class Conv2dFlipout(BaseVariationalLayer_):
 
         kl = self.kl_div(self.mu_kernel, sigma_weight, self.prior_weight_mu,
                          self.prior_weight_sigma)
-        sampled_weight["delta_kernel"] = self.delta_kernel.detach().clone()
+        sampled_weight.append(self.delta_kernel.detach().clone())
 
         if self.bias:
             sigma_bias = torch.log1p(torch.exp(self.rho_bias))
@@ -324,7 +333,7 @@ class Conv2dFlipout(BaseVariationalLayer_):
             self.delta_bias = (sigma_bias * eps_bias)
             kl = kl + self.kl_div(self.mu_bias, sigma_bias, self.prior_bias_mu,
                                   self.prior_bias_sigma)
-            sampled_weight["delta_bias"] = self.delta_bias.detach().clone()
+            sampled_weight.append(self.delta_bias.detach().clone())
 
         return kl, sampled_weight
 
