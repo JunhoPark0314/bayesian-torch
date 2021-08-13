@@ -37,6 +37,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from ..base_variational_layer import BaseVariationalLayer_
+import math
 
 from torch.distributions.normal import Normal
 from torch.distributions.uniform import Uniform
@@ -50,7 +51,7 @@ __all__ = [
     'ConvTranspose3dFlipout',
 ]
 
-
+post_init = lambda x: math.log(math.exp(x) - 1)
 class Conv1dFlipout(BaseVariationalLayer_):
     def __init__(self,
                  in_channels,
@@ -206,7 +207,7 @@ class Conv2dFlipout(BaseVariationalLayer_):
                  prior_mean=0,
                  prior_variance=1,
                  posterior_mu_init=0,
-                 posterior_rho_init=-3.0,
+                 posterior_rho_init=post_init,
                  bias=True):
         """
         Implements Conv2d layer with Flipout reparameterization trick.
@@ -240,7 +241,7 @@ class Conv2dFlipout(BaseVariationalLayer_):
         self.prior_mean = prior_mean
         self.prior_variance = prior_variance
         self.posterior_mu_init = posterior_mu_init
-        self.posterior_rho_init = posterior_rho_init
+        self.posterior_rho_init = post_init(nn.init.calculate_gain(nonlinearity="relu") / (math.sqrt(self.in_channels) * self.kernel_size ** 2))
         self.bias = bias
 
         self.mu_kernel = nn.Parameter(
@@ -325,7 +326,7 @@ class Conv2dFlipout(BaseVariationalLayer_):
 
         kl = self.kl_div(self.mu_kernel, sigma_weight, self.prior_weight_mu,
                          self.prior_weight_sigma)
-        sampled_weight.append(self.delta_kernel.detach().clone())
+        sampled_weight.append((self.delta_kernel.detach() + self.mu_kernel.detach()).clone())
 
         if self.bias:
             sigma_bias = torch.log1p(torch.exp(self.rho_bias))
@@ -333,7 +334,7 @@ class Conv2dFlipout(BaseVariationalLayer_):
             self.delta_bias = (sigma_bias * eps_bias)
             kl = kl + self.kl_div(self.mu_bias, sigma_bias, self.prior_bias_mu,
                                   self.prior_bias_sigma)
-            sampled_weight.append(self.delta_bias.detach().clone())
+            sampled_weight.append((self.delta_bias.detach() + self.mu_bias.detach()).clone())
 
         return kl, sampled_weight
 
@@ -363,7 +364,7 @@ class Conv2dFlipout(BaseVariationalLayer_):
 
         # returning outputs + perturbations
         return outputs + perturbed_outputs
-
+ 
 
 class Conv3dFlipout(BaseVariationalLayer_):
     def __init__(self,

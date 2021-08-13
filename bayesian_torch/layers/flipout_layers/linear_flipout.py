@@ -36,6 +36,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import math
 
 from torch.distributions.normal import Normal
 from torch.distributions.uniform import Uniform
@@ -43,6 +44,7 @@ from ..base_variational_layer import BaseVariationalLayer_
 
 __all__ = ["LinearFlipout"]
 
+post_init = lambda x: math.log(math.exp(x) - 1)
 
 class LinearFlipout(BaseVariationalLayer_):
     def __init__(self,
@@ -51,7 +53,7 @@ class LinearFlipout(BaseVariationalLayer_):
                  prior_mean=0,
                  prior_variance=1,
                  posterior_mu_init=0,
-                 posterior_rho_init=-3.0,
+                 posterior_rho_init=1,
                  bias=True):
         """
         Implements Linear layer with Flipout reparameterization trick.
@@ -76,7 +78,7 @@ class LinearFlipout(BaseVariationalLayer_):
         self.prior_mean = prior_mean
         self.prior_variance = prior_variance
         self.posterior_mu_init = posterior_mu_init
-        self.posterior_rho_init = posterior_rho_init
+        self.posterior_rho_init = post_init(nn.init.calculate_gain(nonlinearity="leaky_relu") / math.sqrt(self.in_features))
 
         self.mu_weight = nn.Parameter(torch.Tensor(out_features, in_features))
         self.rho_weight = nn.Parameter(torch.Tensor(out_features, in_features))
@@ -133,7 +135,7 @@ class LinearFlipout(BaseVariationalLayer_):
         # sampling delta_W
         sigma_weight = torch.log1p(torch.exp(self.rho_weight))
         self.delta_weight = (sigma_weight * self.eps_weight.data.normal_())
-        sampled_weight.append(self.delta_weight.detach().clone())
+        sampled_weight.append((self.delta_weight.detach() + self.mu_weight.detach()).clone())
 
         # get kl divergence
         kl = self.kl_div(self.mu_weight, sigma_weight, self.prior_weight_mu,
@@ -144,7 +146,7 @@ class LinearFlipout(BaseVariationalLayer_):
             self.delta_bias = (sigma_bias * self.eps_bias.data.normal_())
             kl = kl + self.kl_div(self.mu_bias, sigma_bias, self.prior_bias_mu,
                                   self.prior_bias_sigma)
-            sampled_weight.append(self.delta_bias.detach().clone())
+            sampled_weight.append((self.delta_bias.detach() + self.mu_bias.detach()).clone())
         
         return kl, sampled_weight
 
@@ -159,7 +161,7 @@ class LinearFlipout(BaseVariationalLayer_):
 
         # returning outputs + perturbations
         return outputs + perturbed_outputs
-
+ 
     def dist(self):
         mu_list = [self.mu_weight]
         sigma_list = [torch.log1p(torch.exp(self.rho_weight))]
